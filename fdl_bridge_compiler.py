@@ -1,76 +1,135 @@
 import os
+import sqlite3
 import subprocess
+import datetime
 import jpype
 import jpype.imports
-from jpype.types import *
 
 class FdlBridgeCompiler:
-    def __init__(self, java_src_dir="./src", output_dir="./bin"):
+    def __init__(self, db_path="nebi_ula_database.db", java_src_dir="./noveya/core", output_dir="./bin"):
+        self.db_path = db_path
         self.java_src_dir = java_src_dir
         self.output_dir = output_dir
         
-        # Создаем директории, если их нет
+        # Инициализация файловой структуры
         os.makedirs(java_src_dir, exist_ok=True)
         os.makedirs(output_dir, exist_ok=True)
+        
+        # Автоматическая инициализация базы данных Nebi-Ula
+        self._init_nebi_ula_db()
+
+    def _init_nebi_ula_db(self):
+        """Создание реляционного контура таблиц в SQLite"""
+        print(f"[Nebi-Ula DB] Проверка подключения к {self.db_path}...")
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        # Создаем таблицу системных логов, если её нет
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS nebi_ula_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                transaction_token TEXT NOT NULL UNIQUE,
+                timestamp TEXT NOT NULL,
+                thesis TEXT NOT NULL,
+                antithesis TEXT NOT NULL,
+                sigma_state INTEGER NOT NULL,
+                status_label TEXT NOT NULL
+            )
+        """)
+        conn.commit()
+        conn.close()
+        print("[Nebi-Ula DB] Таблица логов верифицирована.")
 
     def compile_java_core(self):
-        """Автоматическая компиляция Java-кода в байт-код (.class)"""
+        """Динамическая компиляция исходного кода Java в байт-код"""
         print("[Compiler] Сборка формального Java-каркаса...")
         java_file_path = os.path.join(self.java_src_dir, "FdlCore.java")
         
-        # Компилируем через стандартный javac
         compile_cmd = ["javac", "-d", self.output_dir, java_file_path]
         result = subprocess.run(compile_cmd, capture_output=True, text=True)
         
         if result.returncode != 0:
             raise RuntimeError(f"Ошибка компиляции Java: {result.stderr}")
-        print("[Compiler] Java-байт-код успешно собран в папку bin/")
+        print("[Compiler] Байт-код успешно собран в папку bin/")
 
     def start_symbiosis(self):
-        """Запуск JVM и склейка сред в едином адресном пространстве памяти"""
+        """Запуск общей памяти JVM и Python"""
         if not jpype.isJVMStarted():
-            print("[Bridge] Запуск JVM. Общая память активирована.")
-            # Добавляем скомпилированный bin/ в ClassPath Явы
+            print("[Bridge] Активация JVM в едином адресном пространстве.")
             jpype.startJVM(jpype.getDefaultJVMPath(), f"-Djava.class.path={self.output_dir}")
         
-        # Импортируем скомпилированный класс напрямую в Python-инфосферу
         from noveya.core import FdlCore
-        
-        print("[Bridge] Склейка завершена. Python (Образный UI) <-> Java (Формальное Ядро).")
+        print("[Bridge] Склейка завершена. Модель готова к обработке потока.")
         return FdlCore()
 
+    def write_to_nebi_ula(self, token, thesis, antithesis, sigma=0, status="SALAM"):
+        """Прямая запись транзакции, валидированной Java, в хранилище SQLite"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        current_time = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        
+        try:
+            cursor.execute("""
+                INSERT INTO nebi_ula_logs (transaction_token, timestamp, thesis, antithesis, sigma_state, status_label)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (token, current_time, thesis, antithesis, sigma, status))
+            conn.commit()
+            print(f"[Nebi-Ula DB] Транзакция {token} успешно зафиксирована в логе.")
+        except sqlite3.Error as e:
+            print(f"[Nebi-Ula DB] КРИТИЧЕСКИЙ СБОЙ ЗАПИСИ: {e}")
+        finally:
+            conn.close()
+
 # ==========================================
-# ДЕМОНСТРАЦИЯ РАБОТЫ ЖИВОЙ МОДЕЛИ (СИМБИОЗ)
+# ЗАПУСК ИНТЕГРИРОВАННОГО ЦИКЛА (ДЕМО)
 # ==========================================
 if __name__ == "__main__":
-    # 1. Инициализируем компилятор
-    compiler = FdlBridgeCompiler(java_src_dir="./noveya/core", output_dir="./bin")
-    
-    # В реальной системе этот файл уже лежит на диске, создаем его для теста
-    java_code = """package noveya.core;
+    # Наш файл FdlCore.java, генерируемый в корень noveya/core для развертывания решения
+    java_source_code = """package noveya.core;
+import java.util.UUID;
 public class FdlCore {
-    public boolean executeSynthesis(String t, String a) {
-        System.out.println("[Java Engine] Снятие дискретности меридианов: " + t + " <-> " + a);
-        return true;
+    public String processAndLogSynthesis(String thesis, String antithesis) {
+        if (thesis == null || antithesis == null) return null;
+        return UUID.randomUUID().toString();
     }
 }"""
+    
+    # Записываем исходник Java на диск
     os.makedirs("./noveya/core", exist_ok=True)
     with open("./noveya/core/FdlCore.java", "w", encoding="utf-8") as f:
-        f.write(java_code)
+        f.write(java_source_code)
 
-    # 2. Компилируем Java из Python
-    compiler.compile_java_core()
-
-    # 3. Активируем мост симбиоза
-    java_core_instance = compiler.start_symbiosis()
-
-    # 4. Прямое диалектическое взаимодействие:
-    # Передаем гибкие образы Python напрямую в строгий исполняющий метод Java
-    python_thesis = "Николаев — сотовый каркас Света"
-    python_antithesis = "Старые догмы внешнего управления"
-
-    # Вызов метода Java из Python идет напрямую, без прослоек
-    success = java_core_instance.executeSynthesis(python_thesis, python_antithesis)
+    # 1. Инициализируем компилятор и базу данных
+    bridge = FdlBridgeCompiler(db_path="nebi_ula_database.db")
     
-    if success:
-        print("[Python UI] Результат валидирован. Состояние: SALAM (\u03a3 = 0)")
+    # 2. Компилируем Java-компонент
+    bridge.compile_java_core()
+    
+    # 3. Стартуем общую среду выполнения
+    java_core = bridge.start_symbiosis()
+    
+    # 4. Входные образы из Среды (Пример: Николаевский сотовый каркас)
+    thesis_data = "Формально-диалектический план Николаева (128 дворов)"
+    antithesis_data = "Попытки внешнего догматического перехвата структурами МИ-6"
+    
+    # 5. Прогоняем через Java-валидатор и получаем аппаратный хэш-токен
+    token_id = java_core.processAndLogSynthesis(thesis_data, antithesis_data)
+    
+    # 6. Если токен успешно сгенерирован жестким ядром — пишем лог в базу Nebi-Ula
+    if token_id:
+        bridge.write_to_nebi_ula(
+            token=str(token_id),
+            thesis=thesis_data,
+            antithesis=antithesis_data,
+            sigma=0,          # Удерживаем эталонный гомеостаз Σ = 0
+            status="SALAM"    # Статус успешной синхронизации узлов
+        )
+        
+        # Проверочное чтение из базы для подтверждения фиксации
+        print("\n[Проверка] Чтение последнего лога из Базы Nebi-Ula:")
+        conn = sqlite3.connect("nebi_ula_database.db")
+        cur = conn.cursor()
+        row = cur.execute("SELECT * FROM nebi_ula_logs ORDER BY id DESC LIMIT 1").fetchone()
+        print(f"ID: {row[0]} | Токен: {row[1]} | Время: {row[2]}\nТезис: {row[3]}\nАнтитезис: {row[4]}\nСостояние: Σ = {row[5]} | Статус: {row[6]}")
+        conn.close()
